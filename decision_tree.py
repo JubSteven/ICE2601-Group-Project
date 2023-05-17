@@ -1,73 +1,90 @@
+import math
 import pandas as pd
-from sklearn import tree
-import graphviz
-from sklearn.model_selection import cross_val_score
-from sklearn import metrics
-import matplotlib.pyplot as plt
 
-df = pd.read_csv("car.csv")
+class Node:
+    def __init__(self, attribute=None, label=None):
+        self.attribute = attribute # attribute used for splitting
+        self.label = label # label assigned to leaf node
+        self.children = {} # dictionary of child nodes
 
+class ID3DecisionTree:
+    def __init__(self):
+        self.tree = None # root node of decision tree
 
-# data pre-processing
-df_dummies = pd.get_dummies(df)
-attribute_names = df_dummies.columns.tolist()
-feature_names = attribute_names[:-2]
-target_names = attribute_names[-2:]
+    def fit(self, X, y):
+        # create pandas dataframe from input data and labels
+        data = pd.DataFrame(X)
+        data['label'] = y
+        
+        # build decision tree recursively
+        self.tree = self._build_tree(data, data.columns[:-1])
 
-X_train = df_dummies.iloc[:int(0.75 * len(df)),:-2]
-y_train = df_dummies.iloc[:int(0.75 * len(df)), -2]
-X_test = df_dummies.iloc[int(0.75 * len(df)):,:-2]
-y_test = df_dummies.iloc[int(0.75 * len(df)):, -2].values.tolist()
+    def predict(self, X):
+        # make predictions for each instance in input data
+        predictions = []
+        for instance in X:
+            node = self.tree
+            while node.children:
+                node = node.children[instance[node.attribute]]
+            predictions.append(node.label)
+        return predictions
 
+    def _build_tree(self, data, attributes):
+        # if all instances have the same label, return a leaf node
+        if len(set(data['label'])) == 1:
+            return Node(label=data['label'].iloc[0])
+        
+        # if no more attributes to split on, return a leaf node with the majority label
+ 
+        if len(attributes) == 0:
+            return Node(label=data['label'].value_counts().idxmax())
 
+        # choose attribute with highest information gain to split on
+        best_attr = self._choose_best_attribute(data, attributes)
 
-def run(CRITERION, MAX_DEPTH, MIN_SPLIT):
-    clf = tree.DecisionTreeClassifier(criterion=CRITERION, max_depth=MAX_DEPTH, min_samples_split=MIN_SPLIT)
-    clf = clf.fit(X_train, y_train)
+        # create a new internal node with the chosen attribute
+        node = Node(attribute=best_attr)
 
+        # recursively build child nodes for each possible value of the chosen attribute
+        for value in data[best_attr].unique():
+            subset = data[data[best_attr] == value]
+            if subset.empty:
+                node.children[value] = Node(label=data['label'].value_counts().idxmax())
+            else:
+                node.children[value] = self._build_tree(subset, [attr for attr in attributes if attr != best_attr])
 
-    # Define feature values for binary features
-    feature_values = [['0', '1'] for _ in range(len(feature_names))]
+        return node
 
-    dot_data = tree.export_graphviz(clf, out_file=None, feature_names=feature_names,
-                                    class_names = target_names, filled=True, rounded=True,
-                                    special_characters=True)
+    def _choose_best_attribute(self, data, attributes):
+        # calculate entropy of the current dataset
+        entropy = self._calculate_entropy(data)
 
-    # Change the output setting to let categorical variables display 0/1 rather than <= 0.5
-    for i, feature_name in enumerate(feature_names):
-        for j, feature_value in enumerate(feature_values[i]):
-            dot_data = dot_data.replace(f'{feature_name} &le; {j + 0.5}', f'{feature_name} = {feature_value}')
+        # initialize variables to keep track of best attribute and its information gain
+        best_attr = None
+        max_info_gain = -math.inf
 
-    # print(dot_data)
-    graph = graphviz.Source(dot_data)
-    graph.render("Results/{}_{}_{}".format(CRITERION, MAX_DEPTH, MIN_SPLIT)) 
-    
-    cross_validation_lst = cross_val_score(clf, X_train, y_train, cv=10).tolist()
-    fpr, tpr, thresholds = metrics.roc_curve(y_test, clf.predict_proba(X_test)[:, 1])
-    roc_auc = metrics.auc(fpr, tpr)
-    display = metrics.RocCurveDisplay(fpr=fpr, tpr=tpr, roc_auc=roc_auc,
-                                    estimator_name='example estimator')
-    display.plot()
-    plt.title("ROC curve")
-    plt.show()
-    
-    # cross_validation_lst.append(correct_num / len(X_test))
+        # calculate information gain for each attribute and choose the one with the highest value
+        for attr in attributes:
+            info_gain = entropy - self._calculate_weighted_average_entropy(data, attr)
+            if info_gain > max_info_gain:
+                best_attr = attr
+                max_info_gain = info_gain
 
-    return cross_validation_lst
-    
-criterions = ['gini', 'entropy', 'log_loss']
-max_depth = [_ for _ in range(3, 8)] + [None]
-min_samples = [_ for _ in range(5, 55, 5)]
-scores = []
-# for c in criterions:
-#     for d in max_depth:
-#         for s in min_samples:
-#             result = run(c,d,s)
-#             result.extend([c,d,s])
-#             scores.append(result)
+        return best_attr
 
-    
-# result_df = pd.DataFrame(scores)
-# result_df.to_csv("Running results.csv")
+    def _calculate_entropy(self, data):
+        # calculate entropy of the dataset
+        labels = data['label'].value_counts()
+        probs = labels / len(data)
+        entropy = -sum(probs * probs.apply(math.log2))
+        return entropy
 
-run('gini', 3, 10)
+    def _calculate_weighted_average_entropy(self, data, attribute):
+        # calculate weighted average entropy of the dataset after splitting on the given attribute
+        subsets = data.groupby(attribute)
+        weighted_entropy = 0
+        for value, subset in subsets:
+            subset_entropy = self._calculate_entropy(subset)
+            weight = len(subset) / len(data)
+            weighted_entropy += weight * subset_entropy
+        return weighted_entropy
